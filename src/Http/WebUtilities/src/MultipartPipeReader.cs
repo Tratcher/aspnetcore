@@ -3,6 +3,7 @@
 
 using System;
 using System.Buffers;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
@@ -10,6 +11,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Primitives;
 
 namespace Microsoft.AspNetCore.WebUtilities
 {
@@ -58,8 +60,22 @@ namespace Microsoft.AspNetCore.WebUtilities
                 return null;
             }
 
-            var headersAccumulator = new KeyValueAccumulator();
+            var headers = await ReadHeadersAsync(cancellationToken);
             _boundary.ExpectLeadingCrlf = true;
+            _currentSectionReader = new MultipartSectionPipeReader(_pipeReader, _boundary)
+            {
+                LengthLimit = BodyLengthLimit,
+            };
+            return new MultipartSection()
+            {
+                Headers = headers,
+                BodyReader = _currentSectionReader,
+            };
+        }
+
+        internal async Task<Dictionary<string, StringValues>> ReadHeadersAsync(CancellationToken cancellationToken)
+        {
+            var headersAccumulator = new KeyValueAccumulator();
             long headersLength = 0;
             while (true)
             {
@@ -81,13 +97,7 @@ namespace Microsoft.AspNetCore.WebUtilities
 
                     if (finishedParsing)
                     {
-                        _currentSectionReader = new MultipartSectionPipeReader(_pipeReader, _boundary);
-                        _currentSectionReader.LengthLimit = BodyLengthLimit;
-                        return new MultipartSection()
-                        {
-                            Headers = headersAccumulator.GetResults(),
-                            BodyReader = _currentSectionReader,
-                        };
+                        return headersAccumulator.GetResults();
                     }
 
                     if (readResult.IsCompleted)
@@ -100,7 +110,6 @@ namespace Microsoft.AspNetCore.WebUtilities
                     _pipeReader.AdvanceTo(buffer.Start, buffer.End);
                 }
             }
-
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
@@ -174,7 +183,6 @@ namespace Microsoft.AspNetCore.WebUtilities
             return false;
         }
 
-
         private void ParseHeaderLineFast(ReadOnlySpan<byte> line,
           ref KeyValueAccumulator accumulator)
         {
@@ -208,7 +216,7 @@ namespace Microsoft.AspNetCore.WebUtilities
             {
                 if (!sequenceReader.TryReadTo(out ReadOnlySequence<byte> line, CrlfDelimiter))
                 {
-                    // Don't buffer indefinately
+                    // Don't buffer indefinitely
                     if (headersLength + sequenceReader.Consumed > HeadersLengthLimit)
                     {
                         throw new InvalidDataException($"Line length limit {HeadersLengthLimit - headersLength} exceeded.");
@@ -293,7 +301,6 @@ namespace Microsoft.AspNetCore.WebUtilities
             {
                 ArrayPool<byte>.Shared.Return(byteArray);
             }
-
         }
 
         private string GetTrimmedString(ReadOnlySpan<byte> readOnlySpan)

@@ -308,19 +308,19 @@ namespace Microsoft.AspNetCore.Http.Features
                 {
                     var fileSection = new FileMultipartSection(section, contentDisposition);
 
-                    var name = fileSection.Name;
-                    var fileName = fileSection.FileName;
-
                     // Enable buffering for the file
-                    var stream = section.EnableRewind(
+                    section.EnableRewind(
                         _request.HttpContext.Response.RegisterForDispose,
                         _options.MemoryBufferThreshold, _options.MultipartBodyLengthLimit);
 
                     // Find the end
-                    await stream.Body.DrainAsync(cancellationToken);
+                    await section.Body.DrainAsync(cancellationToken);
+
+                    var name = fileSection.Name;
+                    var fileName = fileSection.FileName;
 
                     // Individually buffered file body
-                    var file = new FormFile(stream.Body, 0, stream.Body.Length, name, fileName)
+                    var file = new FormFile(section.Body, 0, section.Body.Length, name, fileName)
                     {
                         Headers = new HeaderDictionary(section.Headers)
                     };
