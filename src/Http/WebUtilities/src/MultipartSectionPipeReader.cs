@@ -28,10 +28,15 @@ namespace Microsoft.AspNetCore.WebUtilities
         private bool _advanceNeeded = false;
 
         // Indicates that we finished reading the body of the multipart section - meaning we reached the boundary bytes.
-        private bool _finishedMessage = false;
+        private bool _boundaryFound = false;
+
+        private bool _endOfSectionFound = false;
 
         // We have advanced past all of the trailing metadata, the section is fully complete.
-        private bool _metadataSkipped = false;
+        private bool _finalLineConsumed = false;
+
+        // The length of the boundary + metadata at the end of the section.
+        private long _finalLineLength;
 
         private bool _isReaderComplete;
 
@@ -68,7 +73,7 @@ namespace Microsoft.AspNetCore.WebUtilities
                 throw new InvalidOperationException("AdvanceTo can only be called once per read operation.");
             }
 
-            if (!_finishedMessage && examined.Equals(_bodyBuffer.End))
+            if (!_boundaryFound && examined.Equals(_bodyBuffer.End))
             {
                 // The caller has seen all of the available data. We may have a partial boundary match in the
                 // unconsumed buffer and we need more data to continue.
@@ -117,26 +122,44 @@ namespace Microsoft.AspNetCore.WebUtilities
                 throw new InvalidOperationException("AdvanceTo was not called after the last read operation.");
             }
 
-            while (!_finishedMessage)
+            // TODO: Refactor.
+            // - It's fishy that today we do not return isCompleted until the caller as consumed all of the data we've given them. That's not normal pipe contract.
+            // - When we've found the boundary also scan for the trailing metadata.
+            // - Return isCompleted true if we've found the end of the metadata. Track the boundary and metadata in _unconsumedData.
+            // - Advance to _unconsumedData.End if the isCompleted and the caller advances to _bodyBuffer.End.
+
+            while (!_endOfSectionFound)
             {
+                var priorDataLength = _bodyBuffer.Length;
                 var readResult = await _pipeReader.ReadAsync(cancellationToken);
 
-                _unconsumedData = readResult.Buffer;
-                _bodyBuffer = default;
-                _finishedMessage = TryAdvanceToBoundaryBytes(readResult.IsCompleted);
-
-                if (!_finishedMessage && readResult.IsCompleted)
+                if (readResult.IsCanceled)
                 {
-                    _pipeReader.AdvanceTo(_unconsumedData.End);
-                    throw new IOException("Unexpected end of Stream, the content may have already been read by another component.");
+                    return new ReadResult(default, isCanceled: true, isCompleted: false);
                 }
 
-                if (!_bodyBuffer.IsEmpty)
+                // Simple case, we haven't positively identified the end yet, look for it again.
+                if (!_boundaryFound)
+                {
+                    _unconsumedData = readResult.Buffer;
+                    _bodyBuffer = default;
+                    _boundaryFound = TryReadToBoundaryBytes(readResult.IsCompleted);
+                }
+                else
+                {
+                    // We already know where the body ends, but we still need to find the end of the section.
+                    // We can't assume we got back the same buffers as before, only the same data. Refresh the buffers.
+                    _bodyBuffer = readResult.Buffer.Slice(0, priorDataLength);
+                    _unconsumedData = readResult.Buffer.Slice(priorDataLength);
+                }
+
+                // We still didn't find it, but we've got some new data we could return.
+                if (!_boundaryFound && _bodyBuffer.Length > priorDataLength)
                 {
                     if (LengthLimit.HasValue && LengthLimit.Value - _consumedLength < _bodyBuffer.Length)
                     {
                         _pipeReader.AdvanceTo(_unconsumedData.End);
-                        throw new InvalidDataException($"Multipart body length limit {LengthLimit.GetValueOrDefault()} exceeded.");
+                        throw new InvalidDataException($"Multipart section body length limit {LengthLimit.GetValueOrDefault()} exceeded.");
                     }
 
                     _advanceNeeded = true;
@@ -144,50 +167,50 @@ namespace Microsoft.AspNetCore.WebUtilities
                     return new ReadResult(_bodyBuffer, readResult.IsCanceled, isCompleted: false);
                 }
 
-                // No data or only possible boundary data, keep reading.
-                _pipeReader.AdvanceTo(_unconsumedData.Start, _unconsumedData.End);
+                if (!_boundaryFound)
+                {
+                    // We must be examining a partial boundary match, keep reading.
+                    _pipeReader.AdvanceTo(_bodyBuffer.Start, _unconsumedData.End);
+                    continue;
+                }
+
+                // We've found the boundary. Do we have the trailing metadata now?
+                _endOfSectionFound = TryReadToEndOfSection(readResult.IsCompleted);
+
+                if (!_endOfSectionFound)
+                {
+                    // We need more data find the end of the section
+                    _pipeReader.AdvanceTo(_bodyBuffer.Start, _unconsumedData.End);
+                    continue;
+                }
+
+                _advanceNeeded = !_bodyBuffer.IsEmpty;
+                return new ReadResult(_bodyBuffer, readResult.IsCanceled, isCompleted: true);
             }
 
-            if (!_bodyBuffer.IsEmpty)
+            var remainingBodyLength = _bodyBuffer.Length;
+            if (remainingBodyLength > 0)
             {
-                // We need another read so the caller can advance remaining data.
-                // No need to re-parse, _bodyBuffer already tracks all remaining message data.
+                // We've found the end of the section but the caller still has data to consume.
+                // Get a fresh read so we can advance again.
                 var readResult = await _pipeReader.ReadAsync(cancellationToken);
-                _advanceNeeded = true;
-
                 // We can't assume we got back the same buffers as before, only the same data. Refresh the buffers.
-                _bodyBuffer = readResult.Buffer.Slice(0, _bodyBuffer.Length);
-                _unconsumedData = readResult.Buffer.Slice(_bodyBuffer.Length);
+                _bodyBuffer = readResult.Buffer.Slice(0, remainingBodyLength);
+                _unconsumedData = readResult.Buffer.Slice(remainingBodyLength);
 
-                // We want the caller to consume and advance all of the data before we try to drain the metadata / boundary.
-                return new ReadResult(_bodyBuffer, isCanceled: readResult.IsCanceled, isCompleted: false);
+                _advanceNeeded = true;
+                return new ReadResult(_bodyBuffer, readResult.IsCanceled, isCompleted: true);
             }
 
-            // The caller has advanced past all message data. The boundary has been found but not advanced past yet.
-            // We'll handle all further advances internally.
-            while (!_metadataSkipped)
+            if (!_finalLineConsumed)
             {
-                var readResult = await _pipeReader.ReadAsync(cancellationToken);
-                _unconsumedData = readResult.Buffer;
-
-                var isSectionCompleted = TrySkipMetadata(readResult.IsCompleted);
-                if (isSectionCompleted)
-                {
-                    _pipeReader.AdvanceTo(_unconsumedData.Start);
-                    _metadataSkipped = true;
-                }
-                else
-                {
-                    _pipeReader.AdvanceTo(_unconsumedData.Start, _unconsumedData.End);
-                }
-
-                if (readResult.IsCompleted && !isSectionCompleted)
-                {
-                    throw new IOException("Unexpected end of Stream, the content may have already been read by another component. ");
-                }
+                // TODO: This should have been covered by advance, unless the body was empty?
+                var finalLine = _unconsumedData.Slice(0, _finalLineLength);
+                _pipeReader.AdvanceTo(finalLine.End);
+                _finalLineConsumed = true;
             }
 
-            return new ReadResult(buffer: default, isCanceled: false, isCompleted: true);
+            return new ReadResult(default, isCanceled: false, isCompleted: true);
         }
 
         public override bool TryRead(out ReadResult result)
@@ -201,7 +224,7 @@ namespace Microsoft.AspNetCore.WebUtilities
 
             result = default;
 
-            if (!_finishedMessage)
+            if (!_boundaryFound)
             {
                 if (!_pipeReader.TryRead(out var readResult))
                 {
@@ -210,9 +233,9 @@ namespace Microsoft.AspNetCore.WebUtilities
 
                 _unconsumedData = readResult.Buffer;
                 _bodyBuffer = default;
-                _finishedMessage = TryAdvanceToBoundaryBytes(readResult.IsCompleted);
+                _boundaryFound = TryReadToBoundaryBytes(readResult.IsCompleted);
 
-                if (!_finishedMessage && readResult.IsCompleted)
+                if (!_boundaryFound && readResult.IsCompleted)
                 {
                     _pipeReader.AdvanceTo(_unconsumedData.End);
                     throw new IOException("Unexpected end of Stream, the content may have already been read by another component.");
@@ -258,7 +281,7 @@ namespace Microsoft.AspNetCore.WebUtilities
 
             // The caller has advanced past all message data. The boundary has been found but not advanced past yet.
             // We'll handle all further advances internally.
-            if (!_metadataSkipped)
+            if (!_finalLineConsumed)
             {
                 if (!_pipeReader.TryRead(out var readResult))
                 {
@@ -268,11 +291,11 @@ namespace Microsoft.AspNetCore.WebUtilities
 
                 _unconsumedData = readResult.Buffer;
 
-                var isSectionCompleted = TrySkipMetadata(readResult.IsCompleted);
+                var isSectionCompleted = TryReadToEndOfSection(readResult.IsCompleted);
                 if (isSectionCompleted)
                 {
                     _pipeReader.AdvanceTo(_unconsumedData.Start);
-                    _metadataSkipped = true;
+                    _finalLineConsumed = true;
                     return true;
                 }
                 else
@@ -297,7 +320,7 @@ namespace Microsoft.AspNetCore.WebUtilities
         /// </summary>
         /// <param name="isFinalBlock"></param>
         /// <returns>return true only if found a full match</returns>
-        private bool TryAdvanceToBoundaryBytes(bool isFinalBlock)
+        private bool TryReadToBoundaryBytes(bool isFinalBlock)
         {
             if (isFinalBlock && _unconsumedData.Length < _boundary.FinalBoundaryLength)
             {
@@ -341,14 +364,14 @@ namespace Microsoft.AspNetCore.WebUtilities
         }
 
         /// <summary>
-        /// Skips the following metadata - 
+        /// Called after the boundary has been found. Scans for any trailing metadata.
         /// "The boundary may be followed by zero or more characters of
         /// linear whitespace. It is then terminated by either another CRLF
         /// or -- for the final boundary."
         /// </summary>
         /// <param name="isFinalBlock"></param>
         /// <returns></returns>
-        private bool TrySkipMetadata(bool isFinalBlock)
+        private bool TryReadToEndOfSection(bool isFinalBlock)
         {
             var sequenceReader = new SequenceReader<byte>(_unconsumedData);
             // The unconsumed data begins with the boundary.
@@ -368,10 +391,10 @@ namespace Microsoft.AspNetCore.WebUtilities
                 return false;
             }
 
-            // Some formatters leave off the final CRLF
+            // Some formatters leave off the final CRLF, take the remaining data as the last line.
             if (!reachedNewLine && isFinalBlock)
             {
-                remainder = _unconsumedData.Slice(sequenceReader.Position); // Skip the boundary, if any
+                remainder = _unconsumedData.Slice(sequenceReader.Position); // Minus boundary
             }
 
             // Check if we reached "--" for the final boundary, and that there is only whitespace left
@@ -401,9 +424,8 @@ namespace Microsoft.AspNetCore.WebUtilities
                 }
             }
 
-            var consumed = _unconsumedData.Slice(0, reachedNewLine ? sequenceReader.Position : remainderReader.Position).Length;
-            _unconsumedData = _unconsumedData.Slice(consumed);
-            _consumedLength += consumed;
+            _unconsumedData = _unconsumedData.Slice(0, remainderReader.Position);
+            _finalLineLength = _unconsumedData.Length;
 
             return true;
         }
