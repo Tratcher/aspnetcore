@@ -38,5 +38,15 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal
                 context.Transport = oldTransport;
             }
         }
+
+        private static NetCapture capture = new NetCapture(@"c:\temp\capture.pcap");
+
+        private class LoggingDuplexPipe : DuplexPipeStreamAdapter<PcapStream>
+        {
+            public LoggingDuplexPipe(IDuplexPipe transport, ILogger logger) :
+                base(transport, stream => capture.AddStream(stream))
+            {
+            }
+        }
     }
 }
