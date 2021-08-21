@@ -3,6 +3,7 @@
 
 using System;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
@@ -18,12 +19,11 @@ namespace Microsoft.AspNetCore.Http
     public readonly struct PathString : IEquatable<PathString>
     {
         internal const int StackAllocThreshold = 128;
-        private readonly string? _escaped;
 
         /// <summary>
         /// Represents the empty path. This field is read-only.
         /// </summary>
-        public static readonly PathString Empty = new(string.Empty);
+        public static readonly PathString Empty = new(string.Empty, string.Empty);
 
         /// <summary>
         /// Initialize the path string with a given value. This value must be in unescaped format. Use
@@ -37,7 +37,7 @@ namespace Microsoft.AspNetCore.Http
                 throw new ArgumentException(Resources.FormatException_PathMustStartWithSlash(nameof(value)), nameof(value));
             }
             Value = value;
-            _escaped = null;
+            Escaped = null;
         }
 
         /// <summary>
@@ -58,16 +58,29 @@ namespace Microsoft.AspNetCore.Http
             }
             if (escaped != null && value == null)
             {
-                throw new ArgumentException("Value must be provided along with the escaped version.");
+                if (value == null)
+                {
+                    throw new ArgumentException($"{nameof(value)} must be provided along with the escaped representation.", nameof(value));
+                }
+                else if (escaped.Length < value.Length)
+                {
+                    throw new ArgumentException($"{nameof(escaped)} must be longer or equal to the un-escaped representation.", nameof(escaped));
+                }
             }
+
             Value = value;
-            _escaped = escaped;
+            Escaped = escaped;
         }
 
         /// <summary>
         /// The unescaped path value
         /// </summary>
         public string? Value { get; }
+
+        /// <summary>
+        /// The escaped path value, if any.
+        /// </summary>
+        public string? Escaped { get; }
 
         /// <summary>
         /// True if the path is not empty
@@ -98,12 +111,16 @@ namespace Microsoft.AspNetCore.Http
                 return string.Empty;
             }
 
-            if (!string.IsNullOrEmpty(_escaped))
+            if (Escaped != null)
             {
-                return _escaped;
+                return Escaped;
             }
 
-            var value = Value;
+            return ToEscapedUriComponent(Value);
+        }
+
+        private static string ToEscapedUriComponent(string value)
+        {
             var i = 0;
             for (; i < value.Length; i++)
             {
@@ -207,6 +224,7 @@ namespace Microsoft.AspNetCore.Http
         public static PathString FromUriComponent(string uriComponent)
         {
             int position = uriComponent.IndexOf('%');
+            // TODO: Should this check if uriComponent is properly escaped? See ToEscapedUriComponent
             if (position == -1)
             {
                 return new PathString(uriComponent, uriComponent);
@@ -229,6 +247,7 @@ namespace Microsoft.AspNetCore.Http
             {
                 throw new ArgumentNullException(nameof(uri));
             }
+            // uriComponent doesn't include the leading slash.
             var uriComponent = uri.GetComponents(UriComponents.Path, UriFormat.UriEscaped);
             Span<char> pathBuffer = uriComponent.Length < StackAllocThreshold ? stackalloc char[StackAllocThreshold] : new char[uriComponent.Length + 1];
             pathBuffer[0] = '/';
@@ -291,10 +310,49 @@ namespace Microsoft.AspNetCore.Http
             var value2 = other.Value ?? string.Empty;
             if (value1.StartsWith(value2, comparisonType))
             {
-                if (value1.Length == value2.Length || value1[value2.Length] == '/')
+                // "/foo" == "/foo"
+                if (value1.Length == value2.Length)
                 {
-                    // TODO: Find the remaining escaped portion, if any.
-                    remaining = new PathString(value1[value2.Length..]);
+                    remaining = Empty;
+                    return true;
+                }
+
+                // "/foo/bar" starts with "/foo", remainder "/bar"
+                if (value1[value2.Length] == '/')
+                {
+                    // Find the remaining escaped portion, if any.
+                    var remainingEscaped = Escaped;
+                    if (Escaped != null)
+                    {
+                        var slashCount = 0;
+                        // Count slashs (segments) in the matched string
+                        for (var i = 0; i <  value2.Length; i++)
+                        {
+                            if (value2[i] == '/')
+                            {
+                                slashCount++;
+                            }
+                        }
+
+                        Debug.Assert(slashCount > 0);
+
+                        // Trim that many segments from the start of the escaped string
+                        for (var i = 0; i < Escaped.Length; i++)
+                        {
+                            if (Escaped[i] == '/')
+                            {
+                                slashCount--;
+                                // Go to -1 since we're looking for the end of the segment
+                                if (slashCount < 0)
+                                {
+                                    remainingEscaped = Escaped.Substring(i);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    remaining = new PathString(value1[value2.Length..], remainingEscaped);
                     return true;
                 }
             }
@@ -349,19 +407,31 @@ namespace Microsoft.AspNetCore.Http
         /// <returns>The combined PathString value</returns>
         public PathString Add(PathString other)
         {
-            if (HasValue &&
-                other.HasValue &&
-                Value[^1] == '/')
+            if (!other.HasValue)
+            {
+                return this;
+            }
+
+            if (!HasValue)
+            {
+                return other;
+            }
+
+            string combinedValue;
+            if (Value[^1] == '/')
             {
                 // If the path string has a trailing slash and the other string has a leading slash, we need
                 // to trim one of them.
-                var combined = string.Concat(Value.AsSpan(), other.Value.AsSpan(1));
-                // TODO: Combine and preserve the escaped portion, if any
-                return new PathString(combined);
+                combinedValue = string.Concat(Value.AsSpan(), other.Value.AsSpan(1));
+            }
+            else
+            {
+                combinedValue = Value + other.Value;
             }
 
+
             // TODO: Combine and preserve the escaped portion, if any
-            return new PathString(Value + other.Value);
+            return new PathString(combinedValue);
         }
 
         /// <summary>

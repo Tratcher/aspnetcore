@@ -38,6 +38,7 @@ namespace Microsoft.AspNetCore.Http.Features
         /// </para>
         /// </summary>
         string PathBase { get; set; }
+        string? PathBaseEscaped { get => null; set { } }
 
         /// <summary>
         /// Gets or sets the portion of the request path that identifies the requested resource.
@@ -47,6 +48,7 @@ namespace Microsoft.AspNetCore.Http.Features
         /// </para>
         /// </summary>
         string Path { get; set; }
+        string? PathEscaped { get => null; set { } }
 
         /// <summary>
         /// Gets or sets the query portion of the request-target as defined in RFC 7230. The value

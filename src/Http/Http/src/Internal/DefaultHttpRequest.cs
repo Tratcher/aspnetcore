@@ -71,14 +71,22 @@ namespace Microsoft.AspNetCore.Http
 
         public override PathString PathBase
         {
-            get { return new PathString(HttpRequestFeature.PathBase); }
-            set { HttpRequestFeature.PathBase = value.Value ?? string.Empty; }
+            get { return new PathString(HttpRequestFeature.PathBase, HttpRequestFeature.PathBaseEscaped); }
+            set
+            {
+                HttpRequestFeature.PathBase = value.Value ?? string.Empty;
+                HttpRequestFeature.PathBaseEscaped = value.Escaped;
+            }
         }
 
         public override PathString Path
         {
-            get { return new PathString(HttpRequestFeature.Path); }
-            set { HttpRequestFeature.Path = value.Value ?? string.Empty; }
+            get { return new PathString(HttpRequestFeature.Path, HttpRequestFeature.PathEscaped); }
+            set
+            {
+                HttpRequestFeature.Path = value.Value ?? string.Empty;
+                HttpRequestFeature.PathEscaped = value.Escaped;
+            }
         }
 
         public override QueryString QueryString

@@ -18,6 +18,7 @@ Microsoft.AspNetCore.Http.Metadata.IFromRouteMetadata.Name.get -> string?
 Microsoft.AspNetCore.Http.Metadata.IFromServiceMetadata
 Microsoft.AspNetCore.Http.Endpoint.Endpoint(Microsoft.AspNetCore.Http.RequestDelegate? requestDelegate, Microsoft.AspNetCore.Http.EndpointMetadataCollection? metadata, string? displayName) -> void
 Microsoft.AspNetCore.Http.Endpoint.RequestDelegate.get -> Microsoft.AspNetCore.Http.RequestDelegate?
+Microsoft.AspNetCore.Http.PathString.Escaped.get -> string?
 Microsoft.AspNetCore.Routing.RouteValueDictionary.TryAdd(string! key, object? value) -> bool
 static readonly Microsoft.AspNetCore.Http.HttpProtocol.Http09 -> string!
 static Microsoft.AspNetCore.Http.HttpProtocol.IsHttp09(string! protocol) -> bool
