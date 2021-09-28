@@ -3,6 +3,7 @@
 
 using System;
 using System.Diagnostics;
+using System.IO.Pipelines;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Connections;
 using Microsoft.Extensions.Logging;
@@ -39,7 +40,7 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal
             }
         }
 
-        private static NetCapture capture = new NetCapture(@"c:\temp\capture.pcap");
+        private static readonly NetCapture capture = new NetCapture(@"c:\temp\capture.pcap");
 
         private class LoggingDuplexPipe : DuplexPipeStreamAdapter<PcapStream>
         {

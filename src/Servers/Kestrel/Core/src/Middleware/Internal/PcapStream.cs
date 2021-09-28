@@ -1,3 +1,6 @@
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+
 using System;
 using System.IO;
 using System.Net;
@@ -14,14 +17,14 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal
 {
     internal class PcapStream : Stream
     {
-        private Stream _innerStream;
+        private readonly Stream _innerStream;
         internal Stream InnerStream => _innerStream;
 
         private readonly int localIP4;
         private readonly int remoteIP4;
 
-        private byte[]? localIP6;
-        private byte[]? remoteIP6;
+        private readonly byte[]? localIP6;
+        private readonly byte[]? remoteIP6;
 
         private readonly short localPort;
         private readonly short remotePort;
@@ -30,7 +33,9 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal
         private readonly bool useIPv6;
 
         private long localSequence;
+#pragma warning disable IDE0044 // Add readonly modifier
         private long remoteSequence;
+#pragma warning restore IDE0044 // Add readonly modifier
         private Packet4 _packet4;
         private Packet6 _packet6;
 
@@ -49,7 +54,7 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal
             public byte VersionAndLength;
             public byte TOS;
             public ushort TotalLength;
-            private int Unused;
+            private readonly int Unused;
             public byte TTL;
             public byte Protocol;
             public ushort Checksum;
@@ -351,7 +356,8 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal
             return readLength;
         }
 
-        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) => ReadAsync(new Memory<byte>(buffer, offset, count)).AsTask();
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(new Memory<byte>(buffer, offset, count), cancellationToken).AsTask();
 
         public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
@@ -384,7 +390,8 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal
             InnerStream.Write(buffer);
         }
 
-        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) => WriteAsync(new ReadOnlyMemory<byte>(buffer, offset, count)).AsTask();
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            WriteAsync(new ReadOnlyMemory<byte>(buffer, offset, count), cancellationToken).AsTask();
 
         public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
         {
