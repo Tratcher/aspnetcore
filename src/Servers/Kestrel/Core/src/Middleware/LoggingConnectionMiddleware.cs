@@ -45,8 +45,14 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal
         private class LoggingDuplexPipe : DuplexPipeStreamAdapter<PcapStream>
         {
             public LoggingDuplexPipe(IDuplexPipe transport, ILogger logger) :
-                base(transport, stream => capture.AddStream(stream))
+                base(transport, inner => capture.AddStream(inner))
             {
+            }
+
+            public override ValueTask DisposeAsync()
+            {
+                Stream?.Dispose();
+                return base.DisposeAsync();
             }
         }
     }

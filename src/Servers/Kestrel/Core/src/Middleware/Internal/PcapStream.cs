@@ -310,7 +310,7 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal
 
             if (disposing)
             {
-                InnerStream.Dispose();
+                // InnerStream.Dispose();
             }
 
             base.Dispose(disposing);
