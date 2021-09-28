@@ -130,6 +130,22 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal
             public override EndPoint? RemoteEndPoint { get => _inner.RemoteEndPoint; set => _inner.RemoteEndPoint = value; }
 
             public override IDuplexPipe Transport { get => _inner.Transport; set => _inner.Transport = value; }
+
+            private static readonly NetCapture capture = new NetCapture(@"c:\temp\capture3.pcap");
+
+            private class LoggingDuplexPipe : DuplexPipeStreamAdapter<PcapStream>
+            {
+                public LoggingDuplexPipe(IDuplexPipe transport, ILogger logger) :
+                    base(transport, inner => capture.AddStream(inner))
+                {
+                }
+
+                public override ValueTask DisposeAsync()
+                {
+                    Stream?.Dispose();
+                    return base.DisposeAsync();
+                }
+            }
         }
     }
 }
