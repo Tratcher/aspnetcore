@@ -237,7 +237,7 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal
                     fixed (void* ptr = &_packet6)
                     {
                         _pcap.fs.Write(new ReadOnlySpan<byte>(ptr, sizeof(Packet6)));
-
+                        _pcap.fs.Flush();
                     }
                 }
                 else
@@ -245,13 +245,14 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal
                     fixed (void* ptr = &_packet4)
                     {
                         _pcap.fs.Write(new ReadOnlySpan<byte>(ptr, sizeof(Packet4)));
-
+                        _pcap.fs.Flush();
                     }
                 }
 
                 if (data.Length > 0)
                 {
                     _pcap.fs.Write(data);
+                    _pcap.fs.Flush();
                 }
             }
         }
@@ -444,6 +445,7 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal
             };
 
             fs.Write(new Span<byte>(&header, sizeof(globalHeader)));
+            fs.Flush();
         }
 
         public PcapStream AddStream(Stream stream, IPEndPoint? localEndPoint = null, IPEndPoint? remoteEndPoint = null, int portOffset = defaultPortOffset)
