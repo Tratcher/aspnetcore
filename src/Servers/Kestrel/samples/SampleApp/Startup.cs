@@ -19,6 +19,8 @@ using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.AspNetCore.Connections;
+using System.Collections.Concurrent;
 
 namespace SampleApp;
 
@@ -45,6 +47,12 @@ public class Startup
 
         app.Run(async context =>
         {
+            if (context.Request.Path.Equals("/close"))
+            {
+                context.RequestServices.GetRequiredService<ConnectionShutdownService>().ShutDownConnections();
+                return;
+            }
+
             // Drain the request body
             // await context.Request.Body.CopyToAsync(Stream.Null);
 
@@ -72,6 +80,10 @@ public class Startup
         };
 
         var hostBuilder = new HostBuilder()
+            .ConfigureServices(s =>
+            {
+                s.AddSingleton<ConnectionShutdownService>();
+            })
             .ConfigureWebHost(webHostBuilder =>
             {
                 webHostBuilder
@@ -81,6 +93,7 @@ public class Startup
                         {
                             ShowConfig(context.Configuration);
                         }
+                        var connectionShutdownService = options.ApplicationServices.GetRequiredService<ConnectionShutdownService>();
 
                         var basePort = context.Configuration.GetValue<int?>("BASE_PORT") ?? 5000;
 
@@ -96,6 +109,7 @@ public class Startup
                             //listenOptions.NoDelay = false;
 
                             listenOptions.UseConnectionLogging();
+                            listenOptions.Use(connectionShutdownService.OnConnection);
                         });
 
                         options.Listen(IPAddress.Loopback, basePort + 1, listenOptions =>
@@ -177,6 +191,36 @@ public class Startup
             });
 
         return hostBuilder.Build().RunAsync();
+    }
+
+    private class ConnectionShutdownService
+    {
+        private ConcurrentDictionary<string, ConnectionContext> _activeConnections = new();
+
+        public void ShutDownConnections()
+        {
+            var connections = Interlocked.Exchange(ref _activeConnections, new());
+
+            foreach (var connection in connections)
+            {
+                connection.Value.Abort();
+            }
+        }
+
+        public async Task OnConnection(ConnectionContext context, Func<Task> next)
+        {
+            var connections = _activeConnections;
+            connections.TryAdd(context.ConnectionId, context);
+
+            try
+            {
+                await next();
+            }
+            finally
+            {
+                connections.TryRemove(context.ConnectionId, out _);
+            }
+        }
     }
 
     private static void ShowConfig(IConfiguration config)
